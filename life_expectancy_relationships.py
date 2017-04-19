@@ -1,10 +1,12 @@
+# -*- coding: utf-8 -*-
 """
-Created on Wed 31 20:20:47 2017
+Created on Sun Apr  9 20:30:06 2017
 
 @author: Victor Suárez Gutiérrez
 Research Assistant. Data Scientist at URJC/HGUGM.
 Contact: ssuarezvictor@gmail.com
 """
+
 
 ###############################################################################
 ###############################################################################
@@ -26,9 +28,8 @@ import pandas as pd
 from sklearn.model_selection import train_test_split
 from sklearn.model_selection import KFold as kfold
 from sklearn import preprocessing as pps
-from sklearn.feature_selection import SelectKBest as kbest
-from sklearn.feature_selection import mutual_info_regression
 from sklearn.linear_model import LinearRegression as lr
+from sklearn.linear_model import LassoCV as lassocv
 import matplotlib.pyplot as plt
     
 
@@ -79,57 +80,41 @@ del inputdataset,nans,Country,CountryNotes,Footnotes,Series,SeriesNotes,Spain_co
 ###############################################################################
 ###############################################################################
 # Normalization and Features Selection:
-X_train, X_test, y_train, y_test = train_test_split(features, output, test_size=0.2, random_state=31)
+modas = pd.DataFrame(np.zeros((features.shape[1],100)))
+r2_cv = pd.Series(np.zeros((100)))
+r2_test = pd.Series(np.zeros((100)))
+for j in range(100):   
+    X_train, X_test, y_train, y_test = train_test_split(features, output, test_size=0.2, random_state=31+j)
+    X_train = X_train.reset_index().drop('index',1)
+    y_train = y_train.reset_index().drop('index',1)
+    normalizer = pps.StandardScaler(copy=True, with_mean=True, with_std=True)
+    scaler = normalizer.fit(X_train)
+    X_train_norm = pd.DataFrame(scaler.transform(X_train),columns=X_train.columns)
+    model = lassocv(n_alphas=100, alphas=None, cv=5, max_iter=10000, n_jobs=-1).fit(X_train_norm,y_train['Value'])  
+    modas.ix[np.nonzero(model.coef_)[0],j] = 1        
+    del model    
+
+features = features.ix[:,modas[modas.sum(axis=1)>80].index]
+
+# Features selection with lasso.
+X_train, X_test, y_train, y_test = train_test_split(features, output, test_size=0.2, random_state=31+j)
 X_train = X_train.reset_index().drop('index',1)
 y_train = y_train.reset_index().drop('index',1)
-   
-Normalizer = pps.StandardScaler(copy=True, with_mean=True, with_std=True)
-scaler = Normalizer.fit(X_train)
+normalizer = pps.StandardScaler(copy=True, with_mean=True, with_std=True)
+scaler = normalizer.fit(X_train)
 X_train_norm = pd.DataFrame(scaler.transform(X_train),columns=X_train.columns)
-
-# Mutual information to sort features according to output.
-model_selection = kbest(score_func=mutual_info_regression, k=X_train_norm.shape[1]).fit(X_train_norm,y_train['Value'])
-points = pd.Series(model_selection.scores_/max(model_selection.scores_)).sort_values(ascending=False)
-
-# As linear model is designed, drop colinearities is a must. Threshold = 0.1. It is not necessary to apply mutual information instead.
-corr = np.abs(np.corrcoef(X_train_norm, rowvar=0))  # correlation matrix
-indep = (corr[:,points.index[0]]<=0.1)
-X_train_norm = X_train_norm.ix[:,indep]
-
-model_selection = kbest(score_func=mutual_info_regression, k=X_train_norm.shape[1]).fit(X_train_norm,y_train['Value'])
-points = pd.Series(model_selection.scores_/max(model_selection.scores_)).sort_values(ascending=False)
-corr = np.abs(np.corrcoef(X_train_norm, rowvar=0))  # correlation matrix
-indep = (corr[:,points.index[0]]<=0.1)
-
-X_train_norm = X_train_norm.ix[:,indep]
-model_selection = kbest(score_func=mutual_info_regression, k=X_train_norm.shape[1]).fit(X_train_norm,y_train['Value'])
-points = pd.Series(model_selection.scores_/max(model_selection.scores_)).sort_values(ascending=False)
-corr = np.abs(np.corrcoef(X_train_norm, rowvar=0))  # correlation matrix
-indep = (corr[:,points.index[0]]<=0.1)
-
-## Features selection:
-features2 = features.copy()
-points = np.zeros(features.shape[1],dtype=bool)
-points[[30,129,14]] = True
-features2 = features.ix[:,points]
-
-X_train, X_test, y_train, y_test = train_test_split(features2, output, test_size=0.2, random_state=31)
-X_train = X_train.reset_index().drop('index',1)
-y_train = y_train.reset_index().drop('index',1)
-   
-Normalizer = pps.StandardScaler(copy=True, with_mean=True, with_std=True)
-scaler = Normalizer.fit(X_train)
-X_train_norm = pd.DataFrame(scaler.transform(X_train),columns=X_train.columns)    
-corr = np.corrcoef(X_train_norm, rowvar=0)  # correlation matrix with values less than 0.1. Correct.
-name1 = Indicators[Indicators['IndicatorCode']==features2.columns[0]]['IndicatorName'].unique()[0]
-name2 = Indicators[Indicators['IndicatorCode']==features2.columns[1]]['IndicatorName'].unique()[0]
-name3 = Indicators[Indicators['IndicatorCode']==features2.columns[2]]['IndicatorName'].unique()[0]    
-
-#plt.figure()
-#plt.plot(X_train_norm.ix[:,0])
-#plt.plot(X_train_norm.ix[:,1])
-#plt.plot(X_train_norm.ix[:,2])
+model = lassocv(n_alphas=100, alphas=None, cv=5, max_iter=10000, n_jobs=-1).fit(X_train_norm,y_train['Value'])  
+coef = model.coef_
+coef_index = np.argsort(coef)[::-1]
  
+# As linear model is designed, drop colinearities is a must. Threshold = 0.1. Apply mutual information is not necessary.
+mcov = X_train_norm.cov()
+X_train_norm = pd.concat([X_train_norm.ix[:,coef_index[0]], X_train_norm.drop(X_train_norm.ix[:,np.abs(mcov.ix[:,coef_index[0]])>0.1], 1)], 1)     
+features = features.ix[:,X_train_norm.columns]
+name = Indicators[Indicators['IndicatorCode']==features.columns[0]]['IndicatorName'].unique()[0]
+for i in range(features.shape[1]):
+    print (Indicators[Indicators['IndicatorCode']==features.columns[i]]['IndicatorName'].unique()[0])
+
 
 
 ###############################################################################
@@ -138,16 +123,16 @@ name3 = Indicators[Indicators['IndicatorCode']==features2.columns[2]]['Indicator
 r2_cv = pd.Series(np.zeros((100)))
 r2_test = pd.Series(np.zeros((100)))
 for j in range(100):
-    X_train, X_test, y_train, y_test = train_test_split(features2, output, test_size=0.2, random_state=31+j)
+    X_train, X_test, y_train, y_test = train_test_split(features, output, test_size=0.2, random_state=31+j)
     X_train = X_train.reset_index().drop('index',1)
     y_train = y_train.reset_index().drop('index',1)
     
     normalizer = pps.StandardScaler(copy=True, with_mean=True, with_std=True)
     scaler = normalizer.fit(X_train)
-    X_train_norm = pd.DataFrame(scaler.transform(X_train),columns=X_train.columns)
-    X_test_norm = pd.DataFrame(scaler.transform(X_test),columns=X_train.columns)
+    X_train_norm = pd.DataFrame(scaler.transform(X_train))
+    X_test_norm = pd.DataFrame(scaler.transform(X_test))
 
-    kf = kfold(n_splits=5, random_state=31+j)
+    kf = kfold(n_splits=4, random_state=31+j)
     r2 = pd.Series(np.zeros((kf.n_splits)))
     i=0
     for train_index, validation_index in kf.split(X_train_norm):
@@ -157,15 +142,28 @@ for j in range(100):
         r2[i] = model.score(X_val, y_val['Value'])    # R^2.
         i +=1
     r2_cv[j] = r2.mean()
-    r2_test[j] =  model.score(X_test_norm, y_test['Value'])
-    del model,r2   
+    r2_test[j] =  model.score(X_test_norm, y_test['Value'])   
+
+prediction = model.predict(X_test_norm)    
+                          
+                          
+                          
+###############################################################################
+###############################################################################
+# Representation:
+plt.figure()
+plt.scatter(range(len(prediction)),prediction,c='r')
+plt.scatter(range(len(prediction)),y_test['Value'],c='g')
+plt.title('Total accuracy')
+plt.legend(['Estimation','Real'])
+print ('Total Accuracy: %0.4f%%' % (r2_test.mean()*100))            
     
 plt.figure()
 plt.plot(range(1,101), r2_test)
 plt.plot(range(1,101), np.tile(r2_test.mean(),len(r2_test)), c='r')
 plt.plot(range(1,101), np.tile(r2_test.mean()+r2_test.std(),len(r2_test)), c='r', ls='--')
 plt.plot(range(1,101), np.tile(r2_test.mean()-r2_test.std(),len(r2_test)), c='r', ls='--')
-plt.ylim(0.88,1)
+plt.ylim(0.84,1)
 plt.xlim(1,100)
 plt.title('Test accuracy')
 plt.legend(['Acc','Mean','Std'])
@@ -177,32 +175,8 @@ plt.plot(range(1,101), np.tile(r2_cv.mean()+r2_cv.std(),len(r2_cv)), c='r', ls='
 plt.plot(range(1,101), np.tile(r2_cv.mean()-r2_cv.std(),len(r2_cv)), c='r', ls='--')
 plt.title('Cross validation accuracy')
 plt.legend(['Acc','Mean','Std'])
-plt.ylim(0.88,1)
+plt.ylim(0.84,1)
 plt.xlim(1,100)
-
-
-
-###############################################################################
-###############################################################################
-# Prediction:
-X_train, X_test, y_train, y_test = train_test_split(features2, output, test_size=0.2, random_state=31)
-X_train = X_train.reset_index().drop('index',1)
-y_train = y_train.reset_index().drop('index',1)
-   
-Normalizer = pps.StandardScaler(copy=True, with_mean=True, with_std=True)
-scaler = Normalizer.fit(X_train)
-X_train_norm = pd.DataFrame(scaler.transform(X_train),columns=X_train.columns)   
-X_test_norm = pd.DataFrame(scaler.transform(X_test),columns=X_train.columns) 
-model = lr(n_jobs=-1).fit(X_train_norm, y_train['Value'])
-prediction = model.predict(X_test_norm)    # R^2.
-r2 = model.score(X_test_norm, y_test['Value'])
-
-plt.figure()
-plt.scatter(range(len(prediction)),prediction,c='r')
-plt.scatter(range(len(prediction)),y_test['Value'],c='g')
-plt.title('Total accuracy')
-plt.legend(['Estimation','Real'])
-print ('Total Accuracy: %0.4f%%' % (r2*100))
 
 
 
@@ -210,16 +184,16 @@ print ('Total Accuracy: %0.4f%%' % (r2*100))
 ###############################################################################
 # Set final model:
 normalizer = pps.StandardScaler(copy=True, with_mean=True, with_std=True)
-scaler = normalizer.fit(features2)
-X_norm = pd.DataFrame(scaler.transform(features2),columns=features2.columns)
+scaler = normalizer.fit(features)
+X_norm = pd.DataFrame(scaler.transform(features),columns=features.columns)
 model = lr(n_jobs=-1).fit(X_norm, output['Value'])
 
 
 
 ######## 
 # Clear:
-del Indicators,X_test,X_test_norm,X_tra,X_train,X_train_norm,X_val,corr,features, \
-i,indep,j,points,train_index,validation_index,y_test,y_tra, \
-y_train,y_val
+del Indicators,X_test,X_test_norm,X_tra,X_train,X_train_norm,X_val,mcov, \
+i,j,train_index,validation_index,y_test,y_tra, \
+y_train,y_val,coef_index,modas,r2
 
 
